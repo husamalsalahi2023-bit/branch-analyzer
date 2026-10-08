@@ -1,149 +1,242 @@
-﻿import streamlit as st
+import streamlit as st
 import pdfplumber
 import pandas as pd
 import re
-from PIL import Image
-from google import genai
+from io import BytesIO
 
-st.set_page_config(
-    page_title="المساعد المالي والتشغيلي - مؤسسة حسام الصلاحي",
-    page_icon="🏢",
-    layout="centered"
-)
+st.set_page_config(page_title="منصة التحليل المالي والعمليات - مؤسسة حسام الصلاحي", layout="wide")
 
+# تنسيق الاتجاه والواجهة للغة العربية
 st.markdown("""
 <style>
-    .reportview-container { direction: rtl; }
-    div[data-testid="stMetricValue"] { font-size: 1.35rem; font-weight: bold; }
-    .stButton>button { width: 100%; border-radius: 8px; font-weight: bold; }
+    .reportview-container, .main .block-container { direction: rtl; text-align: right; }
+    h1, h2, h3, h4, p, span, div { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    .stMetric {
+        background-color: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        padding: 12px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🏢 منصة العمليات والقيود اليومية")
-st.caption("مؤسسة حسام الصلاحي التجارية - الإدارة العامة")
+st.title("🏢 منصة التحليل المالي وحركة الحسابات")
+st.caption("مؤسسة حسام الصلاحي التجارية - الإدارة العامة | نظام التحليل الذكي لتقارير أونكس برو")
 
-tab_scanner, tab_pdf = st.tabs(["📸 ماسح الإشعارات ومولد القيود", "📊 تحليل كشف الفرع (PDF)"])
+tab1, tab2 = st.tabs(["📊 التحليل المالي الشامل (PDF)", "📷 مسح الإشعارات وتوليد القيود"])
 
-# ========================================================
-# التبويب الأول: الماسح الذكي لإشعارات وسندات البنوك والصرافة
-# ========================================================
-with tab_scanner:
-    st.subheader("📸 استخراج القيود آلياً من صور الإشعارات")
-    st.write("التقط صورة بكاميرا الجوال أو ارفع صورة إشعار (القطيبي، الكريمي، البسيري، أبو وجدي، ...إلخ).")
-
-    api_key = st.text_input("أدخل مفتاح Gemini API:", type="password", help="احصل عليه مجاناً من Google AI Studio")
-
-    input_mode = st.radio("مصدر الإشعار:", ["رفع صورة / ملف من المعرض", "استخدام كاميرا الجوال مباشرة"], horizontal=True)
-
-    uploaded_image = None
-    if input_mode == "استخدام كاميرا الجوال مباشرة":
-        uploaded_image = st.camera_input("التقط صورة السند / الإشعار")
-    else:
-        uploaded_image = st.file_uploader("اختر صورة الإشعار (JPG, PNG)", type=["jpg", "jpeg", "png"])
-
-    nature_hint = st.selectbox(
-        "نوع الحركة (اختياري لتوجيه الذكاء الاصطناعي):",
-        ["اكتشاف تلقائي ذكي", "سند قبض / استلام حوالة من عميل", "سند صرف / سداد لمورد", "سند صرف مصاريف تشغيلية ونقل", "تحويل نقدي بين الحسابات"]
-    )
-
-    if uploaded_image and st.button("🚀 تحليل الإشعار وتوليد القيد المحاسبي", type="primary"):
-        if not api_key:
-            st.error("⚠️ يرجى إدخال مفتاح Gemini API أولاً لإتمام التحليل بالذكاء الاصطناعي.")
-        else:
-            with st.spinner("جاري قراءة نص السند وتفكيك الحسابات والمبالغ..."):
-                try:
-                    img = Image.open(uploaded_image)
-                    client = genai.Client(api_key=api_key)
-
-                    prompt = f"""
-                    أنت خبير محاسبي معتمد لنظام Onyx Pro ERP في مؤسسة تجارية باليمن.
-                    قم بفحص صورة الإشعار المرفقة واستخرج البيانات وصياغة القيد المحاسبي المزدوج بدقة.
-                    توجيه المستخدم: {nature_hint}.
-
-                    المطلوب استخراجه وعرضه بالترتيب التالي بشكل احترافي ومنسق:
-                    1. نوع المستند والحركة: (مثلاً: سند قبض بنكي، سند صرف حوالة، إشعار قيد دائن/مدين).
-                    2. المبلغ والعملة: بدقة تامة (ريال يمني YER أو ريال سعودي SAR أو دولار USD).
-                    3. التاريخ ورقم المرجع / الإشعار / الحوالة.
-                    4. الطرف الأول (المصدر/المحول): اسمه ورقم حسابه إن وجد.
-                    5. الطرف الثاني (المستفيد/المستلم): اسمه ورقم حسابه إن وجد.
-                    6. القيد المحاسبي المزدوج الجاهز للترحيل في أونكس برو:
-                       - من حـ/ [اسم الحساب والجهة المنفذة - مدين] : المبلغ العملة
-                       - إلى حـ/ [اسم الحساب والجهة المقابلة - دائن] : المبلغ العملة
-                    7. نص البيان النموذجي (الشرح) المكتوب في السند.
-                    8. ملخص واتساب جاهز للنسخ والإرسال للمحاسب بنقرة واحدة.
-                    """
-
-                    response = client.models.generate_content(
-                        model='gemini-2.5-flash',
-                        contents=[img, prompt]
-                    )
-
-                    st.success("✅ تم تحليل الإشعار بنجاح!")
-                    st.markdown(response.text)
-
-                except Exception as e:
-                    st.error(f"حدث خطأ أثناء المعالجة: {str(e)}")
-
-# ========================================================
-# التبويب الثاني: تحليل كشف PDF اليومي للفرع
-# ========================================================
-with tab_pdf:
-    st.subheader("تحليل كشف الحساب التحليلي للفرع (PDF)")
-    uploaded_pdf = st.file_uploader("ارفع كشف أونكس برو اليومي بصيغة PDF", type=["pdf"], key="pdf_tab_uploader")
-
-    def process_branch_pdf(pdf_stream):
-        yer_sales = 0.0
-        yer_expenses = 0.0
-        sar_expenses = 0.0
-        rows_data = []
-
-        with pdfplumber.open(pdf_stream) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text() or ""
-                tables = page.extract_tables()
-                is_yer = "YER" in text or "ريال يمني" in text
-                curr = "YER" if is_yer else "SAR"
-
-                for table in tables:
-                    for r in table:
-                        cleaned = [c.replace("\n", " ").strip() if c else "" for c in r]
-                        line = " ".join(cleaned)
-
-                        if "مبيعات نقدية" in line or "فاتورة مبيعات نقد" in line:
-                            for cell in cleaned:
-                                val = cell.replace(",", "")
-                                if re.match(r"^\d+(\.\d+)?$", val) and float(val) > 0:
-                                    if is_yer: yer_sales += float(val)
-                                    rows_data.append({"البيان": "مبيعات نقدية", "المبلغ": float(val), "العملة": curr, "النوع": "إيراد"})
-                                    break
-
-                        if "سند صرف نقدي" in line:
-                            for cell in cleaned:
-                                val = cell.replace(",", "")
-                                if re.match(r"^\d+(\.\d+)?$", val) and float(val) > 0:
-                                    if is_yer: yer_expenses += float(val)
-                                    else: sar_expenses += float(val)
-                                    rows_data.append({"البيان": line[:40], "المبلغ": float(val), "العملة": curr, "النوع": "صرف"})
-                                    break
-
-        return yer_sales, yer_expenses, sar_expenses, rows_data
+# ======================= التبويب الأول: التحليل المالي =======================
+with tab1:
+    st.subheader("تحليل كشوفات الحساب، المبيعات، الحوالات، والمخزون")
+    uploaded_pdf = st.file_uploader("ارفع تقرير أونكس برو بصيغة PDF (كشف حساب، مبيعات، تكلفة، حركة مخزون)", type=["pdf"])
 
     if uploaded_pdf:
-        with st.spinner("جاري تفكيك الكشف المحاسبي..."):
-            sales_y, exp_y, exp_s, items = process_branch_pdf(uploaded_pdf)
+        with st.spinner("جاري قراءة صفحات التقرير واستخراج الحركات المالية والعملات..."):
+            records = []
+            current_currency = "YER"
+            current_account_name = "الصندوق الرئيسي"
+            current_account_no = ""
 
-        st.success("تم استخراج حركة الفرع بنجاح!")
-        m1, m2 = st.columns(2)
-        m1.metric("إجمالي المبيعات (YER)", f"{sales_y:,.0f}")
-        m2.metric("المصروفات النقدية (YER)", f"{exp_y:,.0f}")
+            with pdfplumber.open(uploaded_pdf) as pdf:
+                for page in pdf.pages:
+                    text = page.extract_text()
+                    if not text:
+                        continue
+                    
+                    lines = text.split("\n")
+                    for line in lines:
+                        # 1. كشف العملة
+                        if "SAR" in line or "سعودي" in line:
+                            current_currency = "SAR"
+                        elif "YER" in line or "يمني" in line:
+                            current_currency = "YER"
+                        elif "USD" in line or "دولار" in line:
+                            current_currency = "USD"
 
-        m3, m4 = st.columns(2)
-        m3.metric("صافي النقد المتبقي (YER)", f"{(sales_y - exp_y):,.0f}")
-        m4.metric("منصرف نقدي (SAR)", f"{exp_s:,.2f}")
+                        # 2. كشف الحساب
+                        if "رقم الحساب" in line:
+                            acc_m = re.search(r'\b(12\d{7})\b', line)
+                            if acc_m:
+                                current_account_no = acc_m.group(1)
+                        if "الصناديق" in line:
+                            current_account_name = "الصناديق"
+                        elif "العملاء" in line:
+                            current_account_name = "العملاء"
+                        elif "المخزون" in line:
+                            current_account_name = "المخزون وتكلفة المبيعات"
 
-        if items:
-            st.divider()
-            df = pd.DataFrame(items)
-            st.dataframe(df, use_container_width=True)
-            csv = df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button("📥 تنزيل كملف Excel (CSV)", data=csv, file_name="حركة_الفرع_اليومية.csv", mime="text/csv")
+                        # 3. استخراج أسطر العمليات بحسب التاريخ DD/MM/YYYY
+                        date_match = re.search(r'(\d{2}/\d{2}/\d{4})', line)
+                        if date_match:
+                            tx_date = date_match.group(1)
+                            
+                            # التقاط كل المبالغ العددية
+                            raw_nums = re.findall(r'(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)', line)
+                            valid_nums = []
+                            for n in raw_nums:
+                                clean = n.replace(",", "")
+                                try:
+                                    v = float(clean)
+                                    # استبعاد التواريخ وأرقام الحسابات
+                                    if 0.01 <= v < 50000000 and len(clean.split('.')[0]) <= 8:
+                                        valid_nums.append(v)
+                                except:
+                                    pass
+
+                            debit = 0.0   # مدين / وارد
+                            credit = 0.0  # دائن / صادر
+
+                            if len(valid_nums) >= 2:
+                                debit = valid_nums[0]
+                                credit = valid_nums[1]
+                            elif len(valid_nums) == 1:
+                                val = valid_nums[0]
+                                if any(k in line for k in ["مبيعات", "قبض", "وارد", "توريد", "دفعه من الحساب", "حوالة مستلمة", "إستلام"]):
+                                    debit = val
+                                else:
+                                    credit = val
+
+                            # 4. تصنيف دقيق وذكي للبند المحاسبي
+                            category = "حركات عامة أخرى"
+                            if "مردود" in line:
+                                category = "مردودات مبيعات"
+                            elif "مبيعات" in line and "تكلفة" not in line:
+                                category = "مبيعات"
+                            elif "تكلفة مبيعات" in line or "المجموعة 201" in line:
+                                category = "تكلفة مبيعات (بضاعة مباعة)"
+                            elif any(k in line for k in ["حوالة مستلمة", "حواله مستلمه", "حواله نقديه", "حوالة مستلمة", "اشعار حوالة"]):
+                                category = "حوالات مستلمة"
+                            elif any(k in line for k in ["سند قبض", "دفعه من الحساب", "دفعه مناولة", "سداد"]):
+                                category = "مقبوضات ودفعات عملاء"
+                            elif any(k in line for k in ["ايداع صندوق", "القطيبي", "دره الجزيره", "السيله", "ايداع"]):
+                                category = "توريدات وإيداعات بنكية"
+                            elif any(k in line for k in ["مصاريف الفرع", "بترول", "كهرباء", "حماله", "نقل", "طحانه"]):
+                                category = "مصاريف تشغيلية ونقل"
+                            elif any(k in line for k in ["سلف", "راتب"]):
+                                category = "سلف ومستحقات موظفين"
+                            elif "مشتريات" in line:
+                                category = "مشتريات"
+                            elif any(k in line for k in ["صرف عملة", "مصارفه"]):
+                                category = "مصارفة وصرف عملة"
+
+                            records.append({
+                                "التاريخ": tx_date,
+                                "الحساب": f"{current_account_name} ({current_account_no})" if current_account_no else current_account_name,
+                                "العملة": current_currency,
+                                "التصنيف": category,
+                                "مدين (وارد)": debit,
+                                "دائن (صادر)": credit,
+                                "البيان الكامل": line.strip()
+                            })
+
+            if records:
+                df = pd.DataFrame(records)
+                st.success(f"تم تحليل {len(df):,} عملية مالية بنجاح عبر صفحات الكشف!")
+
+                # شريط خيارات الفلترة
+                col_sel1, col_sel2 = st.columns([1, 2])
+                with col_sel1:
+                    currencies = df["العملة"].unique().tolist()
+                    chosen_curr = st.selectbox("اختر العملة المطلوبة:", currencies)
+                with col_sel2:
+                    view_mode = st.radio("نوع العرض:", ["📊 ملخص إجمالي ومؤشرات الربحية", "📑 جدول تحليلي تفصيلي"], horizontal=True)
+
+                df_curr = df[df["العملة"] == chosen_curr]
+
+                # حساب المجاميع
+                total_sales = df_curr[df_curr["التصنيف"] == "مبيعات"]["مدين (وارد)"].sum()
+                total_returns = df_curr[df_curr["التصنيف"] == "مردودات مبيعات"]["دائن (صادر)"].sum()
+                if total_returns == 0:
+                    total_returns = df_curr[df_curr["التصنيف"] == "مردودات مبيعات"]["مدين (وارد)"].sum()
+
+                net_sales = total_sales - total_returns
+
+                total_remittances = df_curr[df_curr["التصنيف"] == "حوالات مستلمة"]["مدين (وارد)"].sum()
+                if total_remittances == 0:
+                    total_remittances = df_curr[df_curr["التصنيف"] == "حوالات مستلمة"]["دائن (صادر)"].sum()
+
+                total_receipts = df_curr[df_curr["التصنيف"] == "مقبوضات ودفعات عملاء"]["مدين (وارد)"].sum()
+                total_expenses = df_curr[df_curr["التصنيف"].isin(["مصاريف تشغيلية ونقل", "سلف ومستحقات موظفين"])]["دائن (صادر)"].sum()
+                total_deposits = df_curr[df_curr["التصنيف"] == "توريدات وإيداعات بنكية"]["دائن (صادر)"].sum()
+                
+                total_cogs = df_curr[df_curr["التصنيف"] == "تكلفة مبيعات (بضاعة مباعة)"]["دائن (صادر)"].sum()
+                if total_cogs == 0:
+                    total_cogs = df_curr[df_curr["التصنيف"] == "تكلفة مبيعات (بضاعة مباعة)"]["مدين (وارد)"].sum()
+
+                gross_profit = net_sales - total_cogs if total_cogs > 0 else 0.0
+                profit_margin = (gross_profit / net_sales * 100) if (net_sales > 0 and total_cogs > 0) else 0.0
+
+                if view_mode == "📊 ملخص إجمالي ومؤشرات الربحية":
+                    # صف المبيعات والتحصيلات
+                    r1_1, r1_2, r1_3, r1_4 = st.columns(4)
+                    r1_1.metric(f"إجمالي المبيعات ({chosen_curr})", f"{total_sales:,.2f}")
+                    r1_2.metric(f"المردودات ({chosen_curr})", f"{total_returns:,.2f}")
+                    r1_3.metric(f"صافي المبيعات ({chosen_curr})", f"{net_sales:,.2f}")
+                    r1_4.metric(f"الحوالات المستلمة ({chosen_curr})", f"{total_remittances:,.2f}")
+
+                    # صف التكاليف والأرباح
+                    r2_1, r2_2, r2_3, r2_4 = st.columns(4)
+                    r2_1.metric(f"دفعات ومقبوضات نقدية", f"{total_receipts:,.2f}")
+                    r2_2.metric(f"إجمالي المصروفات والسلف", f"{total_expenses:,.2f}")
+                    r2_3.metric(f"إجمالي الإيداعات والتوريدات", f"{total_deposits:,.2f}")
+                    if total_cogs > 0:
+                        r2_4.metric(f"هامش الربح التقديري", f"{profit_margin:.1f}%", f"ربح: {gross_profit:,.2f}")
+                    else:
+                        r2_4.metric(f"تكلفة المبيعات (COGS)", "غير متوفرة بالكشف", "يتطلب كشف تكلفة")
+
+                    st.markdown("---")
+                    st.write("#### توزيع الحركات حسب البند المالي:")
+                    cat_summary = df_curr.groupby("التصنيف")[["مدين (وارد)", "دائن (صادر)"]].sum().reset_index()
+                    cat_summary["صافي الحركة"] = cat_summary["مدين (وارد)"] - cat_summary["دائن (صادر)"]
+                    st.dataframe(cat_summary.style.format({"مدين (وارد)": "{:,.2f}", "دائن (صادر)": "{:,.2f}", "صافي الحركة": "{:,.2f}"}), use_container_width=True)
+
+                else:
+                    st.write("#### جدول العمليات التفصيلي:")
+                    filter_cat = st.multiselect("تصفية بحسب نوع الحركة:", options=df_curr["التصنيف"].unique(), default=df_curr["التصنيف"].unique())
+                    filtered_df = df_curr[df_curr["التصنيف"].isin(filter_cat)]
+                    st.dataframe(filtered_df[["التاريخ", "الحساب", "التصنيف", "مدين (وارد)", "دائن (صادر)", "البيان الكامل"]], use_container_width=True)
+
+                # زر تحميل Excel مدمج
+                excel_buffer = BytesIO()
+                with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
+                    df.to_excel(writer, index=False, sheet_name='كل العمليات')
+                st.download_button(
+                    label="📥 تحميل التقرير المالي كاملاً بصيغة Excel",
+                    data=excel_buffer.getvalue(),
+                    file_name="تحليل_اونكس_المالي_الشامل.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            else:
+                st.warning("لم يتم العثور على حركات مالية واضحة في الملف.")
+
+# ======================= التبويب الثاني: فاحص الإشعارات =======================
+with tab2:
+    st.subheader("📷 قراءة صور الحوالات والسندات وتوليد قيود أونكس برو")
+    key = st.text_input("أدخل مفتاح Gemini API:", type="password")
+    uploaded_image = st.file_uploader("اختر صورة إشعار بنكي (القطيبي، الكريمي، البسيري، بن دول، إلخ)", type=["jpg", "png", "jpeg"])
+
+    if uploaded_image and key:
+        st.image(uploaded_image, width=320, caption="الإشعار المرفوع")
+        if st.button("تحليل الإشعار وتوليد القيد المحاسبي"):
+            try:
+                import google.generativeai as genai
+                from PIL import Image
+                genai.configure(api_key=key)
+                ai_model = genai.GenerativeModel("gemini-2.5-flash")
+                
+                prompt = """
+                أنت مدقق ومحاسب لنظام أونكس برو في مؤسسة تجارية. استخرج من هذا الإشعار بدقة تامة:
+                1. اسم العميل أو المحول
+                2. المبلغ بدقة والعملة (SAR أو YER)
+                3. الصراف / البنك (مثل القطيبي، الكريمي، إلخ)
+                4. رقم الحوالة / المرجع
+                5. تاريخ العملية
+                ثم اكتب القيد المحاسبي المزدوج الجاهز للإدخال في أونكس برو (من حـ/ ... إلى حـ/ ...).
+                """
+                with st.spinner("جاري التحليل واستخراج القيد..."):
+                    res = ai_model.generate_content([prompt, Image.open(uploaded_image)])
+                    st.success("تم استخراج تفاصيل القيد:")
+                    st.markdown(res.text)
+            except Exception as err:
+                st.error(f"خطأ: {err}")
