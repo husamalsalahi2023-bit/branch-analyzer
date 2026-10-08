@@ -2,12 +2,12 @@ import streamlit as st
 import pdfplumber
 import pandas as pd
 import re
+import json
 from datetime import datetime
-from io import BytesIO
+from PIL import Image
 
 st.set_page_config(page_title="منصة العمليات اليومية - مؤسسة حسام الصلاحي", layout="wide")
 
-# تخصيص واجهة عربية
 st.markdown("""
 <style>
     .reportview-container, .main .block-container { direction: rtl; text-align: right; }
@@ -16,84 +16,124 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# إدارة حالة العمليات اليومية المحفوظة
+# إدارة حالة البيانات المؤقتة
 if "daily_transactions" not in st.session_state:
     st.session_state.daily_transactions = []
 
+if "extracted_data" not in st.session_state:
+    st.session_state.extracted_data = {
+        "amount": 0.0,
+        "currency": "YER",
+        "ref": "",
+        "party": ""
+    }
+
 st.title("🏢 منصة العمليات واليومية الميدانية")
-st.caption("مؤسسة حسام الصلاحي التجارية - الإدارة العامة | توثيق الإشعارات ومطابقة أونكس برو")
+st.caption("مؤسسة حسام الصلاحي التجارية - الإدارة العامة | الاستخراج الآلي للإشعارات والمطابقة")
 
 tab1, tab2 = st.tabs(["📝 تسجيل إشعار وسند يومي (مع كشف الإقفال)", "📊 مطابقة وتحليل كشف أونكس برو (PDF)"])
 
-# ======================= التبويب الأول: مسجل الإشعارات وكشف نهاية اليوم =======================
+# ======================= التبويب الأول: القراءة الآلية للإشعارات =======================
 with tab1:
     st.subheader("تسجيل العمليات الميدانية للإقفال اليومي والمطابقة")
     
     col_input, col_view = st.columns([1, 1])
 
     with col_input:
-        st.write("##### 1. تفاصيل السند أو الإشعار:")
+        st.write("##### 1. ارفع صورة السند أو الإشعار:")
         
         doc_type = st.selectbox(
             "نوع السند / العملية:",
             [
                 "سند قبض نقدي (من عميل)",
-                "سند صرف (مصروفات ونثريات)",
                 "سند صرف (سداد حساب مورد)",
+                "سند صرف (مصروفات ونثريات)",
                 "إشعار توريد / إيداع بنكي أو صراف",
                 "سلف ومستحقات موظفين",
                 "أخرى"
             ]
         )
 
-        party_name = st.text_input("اسم العميل / المورد / بيان الغرض:", placeholder="مثال: العميل بن ناجي / بترول الباص / المورد باحكيم")
+        up_img = st.file_uploader("التقط أو ارفع صورة السند / الإشعار", type=["jpg", "png", "jpeg"], key="receipt_image")
         
-        up_img = st.file_uploader("التقط أو ارفع صورة السند / الإشعار", type=["jpg", "png", "jpeg"])
-        
-        auto_amount = 0.0
-        auto_currency = "YER"
-        auto_ref = ""
-
-        # قراءة آلية بالذكاء الاصطناعي للمساعدة إن وجد المفتاح
+        # القراءة التلقائية فور رفع الصورة
         api_key = st.secrets.get("GEMINI_API_KEY", "")
+
         if up_img and api_key:
-            if st.button("🔍 قراءة المبلغ والمرجع آلياً من الصورة"):
-                try:
-                    import google.generativeai as genai
-                    from PIL import Image
-                    genai.configure(api_key=api_key)
-                    m = genai.GenerativeModel("gemini-2.5-flash")
-                    prompt = "استخرج فقط في سطر واحد: المبلغ كرقم، والعملة (SAR أو YER)، ورقم المرجع أو الإشعار."
-                    res = m.generate_content([prompt, Image.open(up_img)])
-                    st.info(f"البيانات المستخرجة: {res.text}")
-                except Exception as e:
-                    st.warning("تعذر الاستخراج الآلي، يمكنك إدخال المبلغ يدوياً بالأسفل.")
+            if st.session_state.get("last_uploaded_img") != up_img.name:
+                with st.spinner("🤖 جاري قراءة المبلغ والعملة ورقم الإشعار بالذكاء الاصطناعي..."):
+                    try:
+                        import google.generativeai as genai
+                        genai.configure(api_key=api_key)
+                        model = genai.GenerativeModel("gemini-2.5-flash")
+
+                        prompt = """
+                        قم بتحليل صورة هذا الإشعار المالي أو السند واستخرج البيانات بدقة بصيغة JSON فقط:
+                        {
+                            "amount": رقم المبلغ فقط كقيمة عشرية بدون نصوص,
+                            "currency": "YER" إذا كان يمني، أو "SAR" إذا كان سعودي، أو "USD" إذا كان دولار,
+                            "ref": "رقم الحوالة أو المرجع أو رقم الإشعار أو رقم السند إن وجد",
+                            "party": "اسم العميل أو المحول أو المستفيد المذكور في الإشعار"
+                        }
+                        أرجع فقط كود JSON خالص بدون أي علامات markdown إضافية.
+                        """
+                        response = model.generate_content([prompt, Image.open(up_img)])
+                        clean_json = response.text.strip().replace("```json", "").replace("```", "")
+                        data = json.loads(clean_json)
+
+                        st.session_state.extracted_data["amount"] = float(data.get("amount", 0.0))
+                        curr = str(data.get("currency", "YER")).upper()
+                        st.session_state.extracted_data["currency"] = curr if curr in ["YER", "SAR", "USD"] else "YER"
+                        st.session_state.extracted_data["ref"] = str(data.get("ref", ""))
+                        st.session_state.extracted_data["party"] = str(data.get("party", ""))
+                        st.session_state["last_uploaded_img"] = up_img.name
+                        st.success("تم استخراج بيانات الإشعار تلقائياً بنجاح!")
+                    except Exception as e:
+                        st.warning("تم رفع الإشعار، يرجى كتابة الأرقام يدوياً إن لم تُستخرج بدقة.")
+
+        # تعبئة الحقول تلقائياً بالقيم المستخرجة
+        party_name = st.text_input(
+            "اسم العميل / المورد / بيان الغرض:",
+            value=st.session_state.extracted_data["party"],
+            placeholder="مثال: العميل بن ناجي / بترول الباص / المورد باحكيم"
+        )
 
         col_m1, col_m2 = st.columns(2)
         with col_m1:
-            amount = st.number_input("المبلغ:", min_value=0.0, step=100.0, format="%.2f")
+            amount = st.number_input(
+                "المبلغ (المستخرج آلياً):",
+                min_value=0.0,
+                step=100.0,
+                format="%.2f",
+                value=float(st.session_state.extracted_data["amount"])
+            )
         with col_m2:
-            currency = st.selectbox("العملة:", ["YER", "SAR", "USD"])
+            default_curr_idx = ["YER", "SAR", "USD"].index(st.session_state.extracted_data["currency"]) if st.session_state.extracted_data["currency"] in ["YER", "SAR", "USD"] else 0
+            currency = st.selectbox("العملة:", ["YER", "SAR", "USD"], index=default_curr_idx)
 
-        doc_ref = st.text_input("رقم المرجع / الحوالة / السند اليدوي (اختياري):")
+        doc_ref = st.text_input(
+            "رقم المرجع / رقم الحوالة / رقم الإشعار:",
+            value=st.session_state.extracted_data["ref"]
+        )
 
         if st.button("➕ حفظ العملية في كشف اليوم"):
             if amount <= 0:
-                st.error("يرجى كتابة المبلغ الصحيح.")
-            elif not party_name:
-                st.error("يرجى توضيح اسم العميل أو الغرض من الصرف.")
+                st.error("يرجى التأكد من كتابة أو استخراج المبلغ.")
             else:
                 now_str = datetime.now().strftime("%Y-%m-%d %I:%M %p")
                 st.session_state.daily_transactions.append({
                     "الوقت": now_str,
                     "نوع السند": doc_type,
-                    "البيان / المستفيد": party_name,
+                    "البيان / المستفيد": party_name if party_name else "غير محدد",
                     "المبلغ": amount,
                     "العملة": currency,
                     "رقم المرجع": doc_ref if doc_ref else "بدون",
-                    "حالة الترحيل بأونكس": "لم يُرحل بعد ⏳"
+                    "الحالة": "لم يُرحل بعد ⏳"
                 })
-                st.success("تم تسجيل العملية بنجاح في كشف اليوم!")
+                # تفريغ البيانات للعملية التالية
+                st.session_state.extracted_data = {"amount": 0.0, "currency": "YER", "ref": "", "party": ""}
+                st.success("تمت إضافة العملية لكشف اليوم بنجاح!")
+                st.rerun()
 
     with col_view:
         st.write("##### 2. حركة الصندوق المسجلة اليوم:")
@@ -102,7 +142,6 @@ with tab1:
             df_daily = pd.DataFrame(st.session_state.daily_transactions)
             st.dataframe(df_daily[["الوقت", "نوع السند", "البيان / المستفيد", "المبلغ", "العملة", "رقم المرجع"]], use_container_width=True)
 
-            # ملخص سريع لمبالغ اليوم
             s_yer = df_daily[df_daily["العملة"] == "YER"]["المبلغ"].sum()
             s_sar = df_daily[df_daily["العملة"] == "SAR"]["المبلغ"].sum()
             
@@ -111,9 +150,8 @@ with tab1:
             mc2.metric("إجمالي حركات اليوم (SAR)", f"{s_sar:,.2f}")
 
             st.markdown("---")
-            st.write("##### 📤 إرسال كشف المطابقة للمحاسب:")
+            st.write("##### 📤 كشف الإقفال اليومي الجاهز للمحاسب:")
 
-            # تصدير ملف الإقفال اليومي
             csv_daily = df_daily.to_csv(index=False).encode('utf-8-sig')
             st.download_button(
                 label="📥 تحميل كشف المطابقة اليومي (Excel / CSV)",
@@ -126,7 +164,7 @@ with tab1:
                 st.session_state.daily_transactions = []
                 st.rerun()
         else:
-            st.info("لم تقم بتسجيل أي سندات اليوم بعد. يمكنك تسجيل المقبوضات والمصروفات مباشرة أعلاه.")
+            st.info("لم تسجل أي حركة اليوم حتى الآن.")
 
 # ======================= التبويب الثاني: تحليل كشف أونكس برو =======================
 with tab2:
@@ -134,7 +172,7 @@ with tab2:
     uploaded_pdf = st.file_uploader("ارفع تقرير أونكس برو بصيغة PDF", type=["pdf"])
 
     if uploaded_pdf:
-        with st.spinner("جاري قراءة وتحليل التقرير..."):
+        with st.spinner("جاري تحليل التقرير..."):
             records = []
             curr_code = "YER"
 
