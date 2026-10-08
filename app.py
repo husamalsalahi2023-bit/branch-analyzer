@@ -16,7 +16,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# إدارة حالة البيانات المؤقتة
 if "daily_transactions" not in st.session_state:
     st.session_state.daily_transactions = []
 
@@ -29,11 +28,10 @@ if "extracted_data" not in st.session_state:
     }
 
 st.title("🏢 منصة العمليات واليومية الميدانية")
-st.caption("مؤسسة حسام الصلاحي التجارية - الإدارة العامة | الاستخراج الآلي للإشعارات والمطابقة")
+st.caption("مؤسسة حسام الصلاحي التجارية - الإدارة العامة | توثيق الإشعارات والمطابقة")
 
 tab1, tab2 = st.tabs(["📝 تسجيل إشعار وسند يومي (مع كشف الإقفال)", "📊 مطابقة وتحليل كشف أونكس برو (PDF)"])
 
-# ======================= التبويب الأول: القراءة الآلية للإشعارات =======================
 with tab1:
     st.subheader("تسجيل العمليات الميدانية للإقفال اليومي والمطابقة")
     
@@ -54,71 +52,76 @@ with tab1:
             ]
         )
 
-        up_img = st.file_uploader("التقط أو ارفع صورة السند / الإشعار", type=["jpg", "png", "jpeg"], key="receipt_image")
-        
-        # القراءة التلقائية فور رفع الصورة
-        api_key = st.secrets.get("GEMINI_API_KEY", "")
+        up_img = st.file_uploader("التقط أو ارفع صورة السند / الإشعار", type=["jpg", "png", "jpeg"])
 
-        if up_img and api_key:
-            if st.session_state.get("last_uploaded_img") != up_img.name:
-                with st.spinner("🤖 جاري قراءة المبلغ والعملة ورقم الإشعار بالذكاء الاصطناعي..."):
-                    try:
-                        import google.generativeai as genai
-                        genai.configure(api_key=api_key)
-                        model = genai.GenerativeModel("gemini-2.5-flash")
+        # جلب المفتاح تلقائياً إن وجد في secrets، أو إدخاله
+        env_key = st.secrets.get("GEMINI_API_KEY", "")
+        if not env_key:
+            env_key = st.text_input("أدخل مفتاح Gemini API لتفعيل القراءة الآلية:", type="password")
 
-                        prompt = """
-                        قم بتحليل صورة هذا الإشعار المالي أو السند واستخرج البيانات بدقة بصيغة JSON فقط:
-                        {
-                            "amount": رقم المبلغ فقط كقيمة عشرية بدون نصوص,
-                            "currency": "YER" إذا كان يمني، أو "SAR" إذا كان سعودي، أو "USD" إذا كان دولار,
-                            "ref": "رقم الحوالة أو المرجع أو رقم الإشعار أو رقم السند إن وجد",
-                            "party": "اسم العميل أو المحول أو المستفيد المذكور في الإشعار"
-                        }
-                        أرجع فقط كود JSON خالص بدون أي علامات markdown إضافية.
-                        """
-                        response = model.generate_content([prompt, Image.open(up_img)])
-                        clean_json = response.text.strip().replace("```json", "").replace("```", "")
-                        data = json.loads(clean_json)
+        if up_img:
+            if st.button("🔍 قراءة بيانات الإشعار بالذكاء الاصطناعي"):
+                if not env_key:
+                    st.error("يرجى إدخال مفتاح Gemini API أولاً.")
+                else:
+                    with st.spinner("جاري قراءة المبلغ والعملة ورقم الإشعار..."):
+                        try:
+                            import google.generativeai as genai
+                            genai.configure(api_key=env_key)
+                            model = genai.GenerativeModel("gemini-2.5-flash")
 
-                        st.session_state.extracted_data["amount"] = float(data.get("amount", 0.0))
-                        curr = str(data.get("currency", "YER")).upper()
-                        st.session_state.extracted_data["currency"] = curr if curr in ["YER", "SAR", "USD"] else "YER"
-                        st.session_state.extracted_data["ref"] = str(data.get("ref", ""))
-                        st.session_state.extracted_data["party"] = str(data.get("party", ""))
-                        st.session_state["last_uploaded_img"] = up_img.name
-                        st.success("تم استخراج بيانات الإشعار تلقائياً بنجاح!")
-                    except Exception as e:
-                        st.warning("تم رفع الإشعار، يرجى كتابة الأرقام يدوياً إن لم تُستخرج بدقة.")
+                            prompt = """
+                            أنت محاسب مالي. استخرج بدقة من صورة الإشعار أو السند ما يلي فقط بصيغة JSON:
+                            {
+                                "amount": رقم المبلغ فقط كقيمة رقمية بدون نصوص وبدون فواصل,
+                                "currency": "YER" أو "SAR" أو "USD",
+                                "ref": "رقم المرجع أو رقم السند أو رقم الحوالة",
+                                "party": "اسم العميل أو المستفيد أو المحول"
+                            }
+                            أرجع فقط كود JSON خالص.
+                            """
+                            response = model.generate_content([prompt, Image.open(up_img)])
+                            clean_text = response.text.strip().replace("```json", "").replace("```", "")
+                            data = json.loads(clean_text)
 
-        # تعبئة الحقول تلقائياً بالقيم المستخرجة
+                            st.session_state.extracted_data["amount"] = float(data.get("amount", 0.0))
+                            curr = str(data.get("currency", "YER")).upper()
+                            st.session_state.extracted_data["currency"] = curr if curr in ["YER", "SAR", "USD"] else "YER"
+                            st.session_state.extracted_data["ref"] = str(data.get("ref", ""))
+                            st.session_state.extracted_data["party"] = str(data.get("party", ""))
+                            st.success("تم استخراج البيانات بنجاح!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"خطأ أثناء التحليل: {e}")
+
+        # الحقول بعد الاستخراج
         party_name = st.text_input(
             "اسم العميل / المورد / بيان الغرض:",
-            value=st.session_state.extracted_data["party"],
-            placeholder="مثال: العميل بن ناجي / بترول الباص / المورد باحكيم"
+            value=st.session_state.extracted_data["party"]
         )
 
         col_m1, col_m2 = st.columns(2)
         with col_m1:
             amount = st.number_input(
-                "المبلغ (المستخرج آلياً):",
+                "المبلغ:",
                 min_value=0.0,
                 step=100.0,
                 format="%.2f",
                 value=float(st.session_state.extracted_data["amount"])
             )
         with col_m2:
-            default_curr_idx = ["YER", "SAR", "USD"].index(st.session_state.extracted_data["currency"]) if st.session_state.extracted_data["currency"] in ["YER", "SAR", "USD"] else 0
-            currency = st.selectbox("العملة:", ["YER", "SAR", "USD"], index=default_curr_idx)
+            default_curr = st.session_state.extracted_data["currency"]
+            c_idx = ["YER", "SAR", "USD"].index(default_curr) if default_curr in ["YER", "SAR", "USD"] else 0
+            currency = st.selectbox("العملة:", ["YER", "SAR", "USD"], index=c_idx)
 
         doc_ref = st.text_input(
-            "رقم المرجع / رقم الحوالة / رقم الإشعار:",
+            "رقم المرجع / الحوالة / السند:",
             value=st.session_state.extracted_data["ref"]
         )
 
         if st.button("➕ حفظ العملية في كشف اليوم"):
             if amount <= 0:
-                st.error("يرجى التأكد من كتابة أو استخراج المبلغ.")
+                st.error("يرجى إدخال المبلغ.")
             else:
                 now_str = datetime.now().strftime("%Y-%m-%d %I:%M %p")
                 st.session_state.daily_transactions.append({
@@ -130,14 +133,12 @@ with tab1:
                     "رقم المرجع": doc_ref if doc_ref else "بدون",
                     "الحالة": "لم يُرحل بعد ⏳"
                 })
-                # تفريغ البيانات للعملية التالية
                 st.session_state.extracted_data = {"amount": 0.0, "currency": "YER", "ref": "", "party": ""}
-                st.success("تمت إضافة العملية لكشف اليوم بنجاح!")
+                st.success("تمت الإضافة إلى كشف اليوم بنجاح!")
                 st.rerun()
 
     with col_view:
         st.write("##### 2. حركة الصندوق المسجلة اليوم:")
-        
         if st.session_state.daily_transactions:
             df_daily = pd.DataFrame(st.session_state.daily_transactions)
             st.dataframe(df_daily[["الوقت", "نوع السند", "البيان / المستفيد", "المبلغ", "العملة", "رقم المرجع"]], use_container_width=True)
@@ -150,11 +151,9 @@ with tab1:
             mc2.metric("إجمالي حركات اليوم (SAR)", f"{s_sar:,.2f}")
 
             st.markdown("---")
-            st.write("##### 📤 كشف الإقفال اليومي الجاهز للمحاسب:")
-
             csv_daily = df_daily.to_csv(index=False).encode('utf-8-sig')
             st.download_button(
-                label="📥 تحميل كشف المطابقة اليومي (Excel / CSV)",
+                label="📥 تحميل كشف المطابقة اليومي للمحاسب (CSV / Excel)",
                 data=csv_daily,
                 file_name=f"كشف_حركة_اليوم_{datetime.now().strftime('%Y-%m-%d')}.csv",
                 mime="text/csv"
@@ -164,9 +163,8 @@ with tab1:
                 st.session_state.daily_transactions = []
                 st.rerun()
         else:
-            st.info("لم تسجل أي حركة اليوم حتى الآن.")
+            st.info("لم تسجل أي حركة اليوم بعد.")
 
-# ======================= التبويب الثاني: تحليل كشف أونكس برو =======================
 with tab2:
     st.subheader("تحليل كشوفات الحساب وحركة الفرع من أونكس برو (PDF)")
     uploaded_pdf = st.file_uploader("ارفع تقرير أونكس برو بصيغة PDF", type=["pdf"])
@@ -230,6 +228,11 @@ with tab2:
                                 valid_amounts = [a for a in amounts_clean if a < 30000000]
                                 if valid_amounts:
                                     real_amount = valid_amounts[0]
+                            else:
+                                simple_nums = re.findall(r'\b\d+\b', line)
+                                candidates = [float(x) for x in simple_nums if len(x) >= 4 and float(x) < 30000000]
+                                if candidates:
+                                    real_amount = candidates[0]
 
                             debit = real_amount if cat in ["مبيعات نقدية", "مقبوضات ودفعات عملاء", "حوالات مستلمة"] else 0.0
                             credit = real_amount if cat in ["مردودات مبيعات", "مصاريف تشغيلية ونقل", "سلف ومستحقات موظفين", "توريدات وإيداعات بنكية"] else 0.0
