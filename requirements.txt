@@ -1,6 +1,5 @@
 streamlit
 pdfplumber
 pandas
-openpyxl
-google-genai
 pillow
+google-generativeai
