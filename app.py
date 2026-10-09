@@ -32,6 +32,7 @@ st.caption("مؤسسة حسام الصلاحي التجارية - الإدارة
 
 tab1, tab2 = st.tabs(["📝 تسجيل إشعار وسند يومي (مع كشف الإقفال)", "📊 مطابقة وتحليل كشف أونكس برو (PDF)"])
 
+# ======================= التبويب الأول: قراءة الإشعارات =======================
 with tab1:
     st.subheader("تسجيل العمليات الميدانية للإقفال اليومي والمطابقة")
     
@@ -54,33 +55,37 @@ with tab1:
 
         up_img = st.file_uploader("التقط أو ارفع صورة السند / الإشعار", type=["jpg", "png", "jpeg"])
 
-        # جلب المفتاح تلقائياً إن وجد في secrets، أو إدخاله
         env_key = st.secrets.get("GEMINI_API_KEY", "")
         if not env_key:
-            env_key = st.text_input("أدخل مفتاح Gemini API لتفعيل القراءة الآلية:", type="password")
+            env_key = st.text_input("أدخل مفتاح Gemini API:", type="password")
 
         if up_img:
             if st.button("🔍 قراءة بيانات الإشعار بالذكاء الاصطناعي"):
                 if not env_key:
-                    st.error("يرجى إدخال مفتاح Gemini API أولاً.")
+                    st.error("يرجى التأكد من إضافة مفتاح Gemini API.")
                 else:
                     with st.spinner("جاري قراءة المبلغ والعملة ورقم الإشعار..."):
                         try:
-                            import google.generativeai as genai
-                            genai.configure(api_key=env_key)
-                            model = genai.GenerativeModel("gemini-2.5-flash")
-
+                            from google import genai
+                            client = genai.Client(api_key=env_key)
+                            
                             prompt = """
-                            أنت محاسب مالي. استخرج بدقة من صورة الإشعار أو السند ما يلي فقط بصيغة JSON:
-                            {
-                                "amount": رقم المبلغ فقط كقيمة رقمية بدون نصوص وبدون فواصل,
-                                "currency": "YER" أو "SAR" أو "USD",
-                                "ref": "رقم المرجع أو رقم السند أو رقم الحوالة",
-                                "party": "اسم العميل أو المستفيد أو المحول"
-                            }
-                            أرجع فقط كود JSON خالص.
+                            أنت محاسب مالي خبير. قم بتحليل صورة السند أو الإشعار المرفق واستخرج بدقة:
+                            - المبلغ (amount) كرقم فقط بدون نصوص
+                            - العملة (currency) وتكون إما YER أو SAR أو USD
+                            - رقم المرجع أو الحوالة أو السند (ref)
+                            - اسم العميل أو المورد أو المستفيد (party)
+                            
+                            أعد النتيجة بصيغة JSON فقط بهذا الشكل:
+                            {"amount": 1000, "currency": "YER", "ref": "12345", "party": "اسم الشخص"}
                             """
-                            response = model.generate_content([prompt, Image.open(up_img)])
+                            
+                            img = Image.open(up_img)
+                            response = client.models.generate_content(
+                                model='gemini-2.5-flash',
+                                contents=[prompt, img]
+                            )
+                            
                             clean_text = response.text.strip().replace("```json", "").replace("```", "")
                             data = json.loads(clean_text)
 
@@ -94,7 +99,6 @@ with tab1:
                         except Exception as e:
                             st.error(f"خطأ أثناء التحليل: {e}")
 
-        # الحقول بعد الاستخراج
         party_name = st.text_input(
             "اسم العميل / المورد / بيان الغرض:",
             value=st.session_state.extracted_data["party"]
@@ -165,6 +169,7 @@ with tab1:
         else:
             st.info("لم تسجل أي حركة اليوم بعد.")
 
+# ======================= التبويب الثاني: تحليل كشف أونكس برو =======================
 with tab2:
     st.subheader("تحليل كشوفات الحساب وحركة الفرع من أونكس برو (PDF)")
     uploaded_pdf = st.file_uploader("ارفع تقرير أونكس برو بصيغة PDF", type=["pdf"])
