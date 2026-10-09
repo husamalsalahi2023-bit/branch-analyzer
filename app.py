@@ -3,57 +3,47 @@ import pdfplumber
 import pandas as pd
 import re
 import json
+import base64
+import requests
 from datetime import datetime
-from PIL import Image
 
-st.set_page_config(page_title="منصة العمليات اليومية - مؤسسة حسام الصلاحي", layout="wide")
+st.set_page_config(page_title="منصة القيود والعمليات الميدانية - مؤسسة حسام الصلاحي", layout="wide")
 
 st.markdown("""
 <style>
     .reportview-container, .main .block-container { direction: rtl; text-align: right; }
     h1, h2, h3, h4, p, span, div { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
     .stMetric { background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; }
+    .entry-box { background-color: #f1f5f9; border-right: 5px solid #2563eb; padding: 15px; border-radius: 6px; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
 if "daily_transactions" not in st.session_state:
     st.session_state.daily_transactions = []
 
-if "extracted_data" not in st.session_state:
-    st.session_state.extracted_data = {
+if "parsed_receipt" not in st.session_state:
+    st.session_state.parsed_receipt = {
         "amount": 0.0,
         "currency": "YER",
         "ref": "",
-        "party": ""
+        "sender": "",
+        "bank": ""
     }
 
-st.title("🏢 منصة العمليات واليومية الميدانية")
-st.caption("مؤسسة حسام الصلاحي التجارية - الإدارة العامة | توثيق الإشعارات والمطابقة")
+st.title("🏢 منصة العمليات والقيود اليومية الميدانية")
+st.caption("مؤسسة حسام الصلاحي التجارية - الإدارة العامة | قراءة الإشعارات وتوليد قيود أونكس برو")
 
-tab1, tab2 = st.tabs(["📝 تسجيل إشعار وسند يومي (مع كشف الإقفال)", "📊 مطابقة وتحليل كشف أونكس برو (PDF)"])
+tab1, tab2 = st.tabs(["📷 قراءة الإشعار وتوليد القيد الميداني", "📊 مطابقة وتحليل كشف أونكس برو (PDF)"])
 
-# ======================= التبويب الأول: قراءة الإشعارات =======================
+# ======================= التبويب الأول: قراءة وتوليد القيود =======================
 with tab1:
-    st.subheader("تسجيل العمليات الميدانية للإقفال اليومي والمطابقة")
+    st.subheader("مسح الإشعارات وتوجيه القيود المحاسبية")
     
-    col_input, col_view = st.columns([1, 1])
+    col1, col2 = st.columns([1, 1])
 
-    with col_input:
+    with col1:
         st.write("##### 1. ارفع صورة السند أو الإشعار:")
-        
-        doc_type = st.selectbox(
-            "نوع السند / العملية:",
-            [
-                "سند قبض نقدي (من عميل)",
-                "سند صرف (سداد حساب مورد)",
-                "سند صرف (مصروفات ونثريات)",
-                "إشعار توريد / إيداع بنكي أو صراف",
-                "سلف ومستحقات موظفين",
-                "أخرى"
-            ]
-        )
-
-        up_img = st.file_uploader("التقط أو ارفع صورة السند / الإشعار", type=["jpg", "png", "jpeg"])
+        up_img = st.file_uploader("التقط أو ارفع صورة الإشعار / السند", type=["jpg", "png", "jpeg"], key="receipt_file")
 
         env_key = st.secrets.get("GEMINI_API_KEY", "")
         if not env_key:
@@ -62,104 +52,171 @@ with tab1:
         if up_img:
             if st.button("🔍 قراءة بيانات الإشعار بالذكاء الاصطناعي"):
                 if not env_key:
-                    st.error("يرجى التأكد من إضافة مفتاح Gemini API.")
+                    st.error("يرجى إدخال مفتاح Gemini API أولاً.")
                 else:
-                    with st.spinner("جاري قراءة المبلغ والعملة ورقم الإشعار..."):
+                    with st.spinner("جاري استخراج المبلغ والعملة واسم المرسل والمرجع من الإشعار..."):
                         try:
-                            from google import genai
-                            client = genai.Client(api_key=env_key)
-                            
-                            prompt = """
-                            أنت محاسب مالي خبير. قم بتحليل صورة السند أو الإشعار المرفق واستخرج بدقة:
-                            - المبلغ (amount) كرقم فقط بدون نصوص
-                            - العملة (currency) وتكون إما YER أو SAR أو USD
-                            - رقم المرجع أو الحوالة أو السند (ref)
-                            - اسم العميل أو المورد أو المستفيد (party)
-                            
-                            أعد النتيجة بصيغة JSON فقط بهذا الشكل:
-                            {"amount": 1000, "currency": "YER", "ref": "12345", "party": "اسم الشخص"}
-                            """
-                            
-                            img = Image.open(up_img)
-                            response = client.models.generate_content(
-                                model='gemini-2.5-flash',
-                                contents=[prompt, img]
-                            )
-                            
-                            clean_text = response.text.strip().replace("```json", "").replace("```", "")
-                            data = json.loads(clean_text)
+                            img_bytes = up_img.getvalue()
+                            mime_type = up_img.type if up_img.type else "image/jpeg"
+                            b64_data = base64.b64encode(img_bytes).decode("utf-8")
 
-                            st.session_state.extracted_data["amount"] = float(data.get("amount", 0.0))
-                            curr = str(data.get("currency", "YER")).upper()
-                            st.session_state.extracted_data["currency"] = curr if curr in ["YER", "SAR", "USD"] else "YER"
-                            st.session_state.extracted_data["ref"] = str(data.get("ref", ""))
-                            st.session_state.extracted_data["party"] = str(data.get("party", ""))
-                            st.success("تم استخراج البيانات بنجاح!")
-                            st.rerun()
+                            prompt_text = """
+                            أنت محاسب مالي خبير بنظام أونكس برو. حلل صورة الإشعار واستخرج فقط JSON خالص بالصيغة التالية:
+                            {
+                                "amount": رقم المبلغ فقط كقيمة رقمية بدون نصوص وبدون فواصل,
+                                "currency": العملة (YER أو SAR أو USD),
+                                "ref": "رقم الحوالة أو السند أو المرجع إن وجد",
+                                "sender": "اسم الشخص أو الجهة المرسلة أو المودعة المكتوبة في الورقة",
+                                "bank": "اسم الصراف أو البنك المذكور في الإشعار (مثل القطيبي، درة الجزيرة، الكريمي...)"
+                            }
+                            أرجع كود JSON فقط بدون شروح إضافية.
+                            """
+
+                            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={env_key.strip()}"
+                            payload = {
+                                "contents": [{
+                                    "parts": [
+                                        {"text": prompt_text},
+                                        {"inline_data": {"mime_type": mime_type, "data": b64_data}}
+                                    ]
+                                }]
+                            }
+
+                            res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=30)
+                            if res.status_code == 200:
+                                res_json = res.json()
+                                raw_text = res_json['candidates'][0]['content']['parts'][0]['text']
+                                clean_json = raw_text.strip().replace("```json", "").replace("```", "").strip()
+                                data = json.loads(clean_json)
+
+                                st.session_state.parsed_receipt["amount"] = float(data.get("amount", 0.0))
+                                c = str(data.get("currency", "YER")).upper()
+                                st.session_state.parsed_receipt["currency"] = c if c in ["YER", "SAR", "USD"] else "YER"
+                                st.session_state.parsed_receipt["ref"] = str(data.get("ref", ""))
+                                st.session_state.parsed_receipt["sender"] = str(data.get("sender", ""))
+                                st.session_state.parsed_receipt["bank"] = str(data.get("bank", ""))
+                                st.success("تمت قراءة بيانات الإشعار بنجاح! راجع التفاصيل بالأسفل وأضف توضيحك.")
+                                st.rerun()
+                            else:
+                                st.error(f"خطأ في الاتصال: {res.text}")
                         except Exception as e:
                             st.error(f"خطأ أثناء التحليل: {e}")
 
-        party_name = st.text_input(
-            "اسم العميل / المورد / بيان الغرض:",
-            value=st.session_state.extracted_data["party"]
+        st.markdown("---")
+        st.write("##### 2. مراجعة وتوضيح طبيعة العملية:")
+
+        c_a1, c_a2 = st.columns(2)
+        with c_a1:
+            amount_val = st.number_input("المبلغ:", min_value=0.0, step=100.0, format="%.2f", value=float(st.session_state.parsed_receipt["amount"]))
+        with c_a2:
+            currs = ["YER", "SAR", "USD"]
+            c_idx = currs.index(st.session_state.parsed_receipt["currency"]) if st.session_state.parsed_receipt["currency"] in currs else 0
+            curr_val = st.selectbox("العملة:", currs, index=c_idx)
+
+        c_r1, c_r2 = st.columns(2)
+        with c_r1:
+            ref_val = st.text_input("رقم الحوالة / المرجع:", value=st.session_state.parsed_receipt["ref"])
+        with c_r2:
+            sender_val = st.text_input("المرسل المذكور في الإشعار:", value=st.session_state.parsed_receipt["sender"])
+
+        bank_or_box = st.text_input(
+            "حساب الصراف / البنك / الصندوق الذي تمت فيه الحركة:",
+            value=st.session_state.parsed_receipt["bank"],
+            placeholder="مثال: حساب صرافة القطيبي / درة الجزيرة / صندوق الفرع"
         )
 
-        col_m1, col_m2 = st.columns(2)
-        with col_m1:
-            amount = st.number_input(
-                "المبلغ:",
-                min_value=0.0,
-                step=100.0,
-                format="%.2f",
-                value=float(st.session_state.extracted_data["amount"])
-            )
-        with col_m2:
-            default_curr = st.session_state.extracted_data["currency"]
-            c_idx = ["YER", "SAR", "USD"].index(default_curr) if default_curr in ["YER", "SAR", "USD"] else 0
-            currency = st.selectbox("العملة:", ["YER", "SAR", "USD"], index=c_idx)
-
-        doc_ref = st.text_input(
-            "رقم المرجع / الحوالة / السند:",
-            value=st.session_state.extracted_data["ref"]
+        op_type = st.selectbox(
+            "توضيح نوع العملية:",
+            [
+                "قبض من عميل (سداد حساب عميل)",
+                "مبيعات نقدية مباشرة",
+                "صرف وسداد حساب مورد",
+                "صرف مصروفات ونثريات تشغيلية",
+                "سلف ومستحقات موظفين",
+                "توريد / تحويل بين الحسابات"
+            ]
         )
 
-        if st.button("➕ حفظ العملية في كشف اليوم"):
-            if amount <= 0:
-                st.error("يرجى إدخال المبلغ.")
+        party_detail = st.text_input(
+            "اسم العميل الفعلي / اسم المورد / بيان المصروف:",
+            placeholder="مثال: العميل باحكيم / المورد بن داعر / مصاريف بترول وديزل"
+        )
+
+        if st.button("⚖️ إصدار القيد المحاسبي وحفظه في كشف اليوم"):
+            if amount_val <= 0:
+                st.error("يرجى التأكد من كتابة أو استخراج المبلغ.")
             else:
-                now_str = datetime.now().strftime("%Y-%m-%d %I:%M %p")
+                from_acc = ""
+                to_acc = ""
+                
+                # توليد القيد المحاسبي
+                if "قبض من عميل" in op_type:
+                    from_acc = f"حـ/ {bank_or_box if bank_or_box else 'الصندوق / الصراف'}"
+                    to_acc = f"حـ/ العميل: {party_detail if party_detail else sender_val}"
+                elif "مبيعات" in op_type:
+                    from_acc = f"حـ/ {bank_or_box if bank_or_box else 'الصندوق'}"
+                    to_acc = "حـ/ المبيعات النقدية"
+                elif "سداد حساب مورد" in op_type:
+                    from_acc = f"حـ/ المورد: {party_detail}"
+                    to_acc = f"حـ/ {bank_or_box if bank_or_box else 'الصندوق / الصراف'}"
+                elif "مصروفات" in op_type:
+                    from_acc = f"حـ/ المصروفات: {party_detail}"
+                    to_acc = f"حـ/ {bank_or_box if bank_or_box else 'الصندوق'}"
+                elif "سلف" in op_type:
+                    from_acc = f"حـ/ سلف العاملين: {party_detail}"
+                    to_acc = f"حـ/ {bank_or_box if bank_or_box else 'الصندوق'}"
+                else:
+                    from_acc = f"حـ/ {party_detail}"
+                    to_acc = f"حـ/ {bank_or_box}"
+
+                entry_text = f"من {from_acc}  |  إلى {to_acc}"
+
+                now_time = datetime.now().strftime("%Y-%m-%d %I:%M %p")
                 st.session_state.daily_transactions.append({
-                    "الوقت": now_str,
-                    "نوع السند": doc_type,
-                    "البيان / المستفيد": party_name if party_name else "غير محدد",
-                    "المبلغ": amount,
-                    "العملة": currency,
-                    "رقم المرجع": doc_ref if doc_ref else "بدون",
-                    "الحالة": "لم يُرحل بعد ⏳"
+                    "الوقت": now_time,
+                    "النوع": op_type,
+                    "المبلغ": amount_val,
+                    "العملة": curr_val,
+                    "الطرف / البيان": party_detail if party_detail else sender_val,
+                    "الصراف / الصندوق": bank_or_box,
+                    "رقم المرجع": ref_val if ref_val else "بدون",
+                    "القيد المحاسبي (أونكس)": entry_text
                 })
-                st.session_state.extracted_data = {"amount": 0.0, "currency": "YER", "ref": "", "party": ""}
-                st.success("تمت الإضافة إلى كشف اليوم بنجاح!")
+
+                st.session_state.parsed_receipt = {"amount": 0.0, "currency": "YER", "ref": "", "sender": "", "bank": ""}
+                st.success("تم إصدار القيد وحفظ العملية بنجاح!")
                 st.rerun()
 
-    with col_view:
-        st.write("##### 2. حركة الصندوق المسجلة اليوم:")
+    with col2:
+        st.write("##### 3. كشف العمليات والقيود المسجلة اليوم:")
         if st.session_state.daily_transactions:
-            df_daily = pd.DataFrame(st.session_state.daily_transactions)
-            st.dataframe(df_daily[["الوقت", "نوع السند", "البيان / المستفيد", "المبلغ", "العملة", "رقم المرجع"]], use_container_width=True)
-
-            s_yer = df_daily[df_daily["العملة"] == "YER"]["المبلغ"].sum()
-            s_sar = df_daily[df_daily["العملة"] == "SAR"]["المبلغ"].sum()
+            df_entries = pd.DataFrame(st.session_state.daily_transactions)
             
-            mc1, mc2 = st.columns(2)
-            mc1.metric("إجمالي حركات اليوم (YER)", f"{s_yer:,.2f}")
-            mc2.metric("إجمالي حركات اليوم (SAR)", f"{s_sar:,.2f}")
+            for idx, r in df_entries.iterrows():
+                with st.container():
+                    st.markdown(f"""
+                    <div class="entry-box">
+                        📌 <b>{r['النوع']}</b> | {r['المبلغ']:,.2f} {r['العملة']} (مرجع: {r['رقم المرجع']})<br>
+                        البيان: {r['الطرف / البيان']} | الجهة: {r['الصراف / الصندوق']}<br>
+                        <span style="color: #1e3a8a;"><b>القيد:</b> {r['القيد المحاسبي (أونكس)']}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    st.write("")
 
             st.markdown("---")
-            csv_daily = df_daily.to_csv(index=False).encode('utf-8-sig')
+            # إجماليات
+            sum_yer = df_entries[df_entries["العملة"] == "YER"]["المبلغ"].sum()
+            sum_sar = df_entries[df_entries["العملة"] == "SAR"]["المبلغ"].sum()
+            mc1, mc2 = st.columns(2)
+            mc1.metric("إجمالي اليومية (YER)", f"{sum_yer:,.2f}")
+            mc2.metric("إجمالي اليومية (SAR)", f"{sum_sar:,.2f}")
+
+            # تصدير الكشف للمحاسب
+            csv_data = df_entries.to_csv(index=False).encode('utf-8-sig')
             st.download_button(
-                label="📥 تحميل كشف المطابقة اليومي للمحاسب (CSV / Excel)",
-                data=csv_daily,
-                file_name=f"كشف_حركة_اليوم_{datetime.now().strftime('%Y-%m-%d')}.csv",
+                label="📥 تحميل كشف القيود اليومية للمحاسب (Excel / CSV)",
+                data=csv_data,
+                file_name=f"قيود_حركة_اليوم_{datetime.now().strftime('%Y-%m-%d')}.csv",
                 mime="text/csv"
             )
 
@@ -167,7 +224,7 @@ with tab1:
                 st.session_state.daily_transactions = []
                 st.rerun()
         else:
-            st.info("لم تسجل أي حركة اليوم بعد.")
+            st.info("لم تصدر أي قيود بعد اليوم. ارفع الإشعار وحدد الطرف لتوليد القيد وحفظه.")
 
 # ======================= التبويب الثاني: تحليل كشف أونكس برو =======================
 with tab2:
