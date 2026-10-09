@@ -3,3 +3,5 @@ pdfplumber
 pandas
 pillow
 requests
+arabic-reshaper
+python-bidi
