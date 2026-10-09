@@ -2,4 +2,4 @@ streamlit
 pdfplumber
 pandas
 pillow
-google-generativeai
+google-genai
